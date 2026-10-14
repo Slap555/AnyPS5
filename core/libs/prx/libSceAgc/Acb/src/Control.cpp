@@ -11,6 +11,11 @@
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 
+extern "C" {
+std::uint32_t* APS5_VABI sceAgcDcbSetWorkloadsActive(CommandBuffer* buf, std::uint32_t streamId, const std::uint32_t* workloadIds, std::uint32_t workloadCount);
+std::uint32_t* APS5_VABI sceAgcDcbSetWorkloadComplete(CommandBuffer* buf, std::uint32_t streamId, std::uint32_t workloadId);
+}
+
 namespace {
 
 std::uint32_t* RejectUnregisteredWorkloadStream(CommandBuffer* buf, std::uint32_t streamId, const char* function) {
@@ -82,14 +87,11 @@ std::uint32_t* APS5_VABI sceAgcAcbSetFlip(CommandBuffer* buf, std::uint32_t vide
 }
 
 std::uint32_t* APS5_VABI sceAgcAcbSetWorkloadsActive(CommandBuffer* buf, std::uint32_t streamId, const std::uint32_t* workloadIds, std::uint32_t workloadCount) {
-    (void)workloadIds;
-    (void)workloadCount;
-    return RejectUnregisteredWorkloadStream(buf, streamId, __func__);
+    return sceAgcDcbSetWorkloadsActive(buf, streamId, workloadIds, workloadCount);
 }
 
 std::uint32_t* APS5_VABI sceAgcAcbSetWorkloadComplete(CommandBuffer* buf, std::uint32_t streamId, std::uint32_t workloadId) {
-    (void)workloadId;
-    return RejectUnregisteredWorkloadStream(buf, streamId, __func__);
+    return sceAgcDcbSetWorkloadComplete(buf, streamId, workloadId);
 }
 
 std::uint32_t* APS5_VABI sceAgcAcbSetWorkloadStreamInactive(CommandBuffer* buf, std::uint32_t streamId) {
