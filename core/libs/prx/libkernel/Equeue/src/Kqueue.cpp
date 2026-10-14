@@ -136,7 +136,18 @@ int AddDescriptorKnote(const KernelEqueueRef& queue, KernelEvent& change, std::u
         NotImplemented_nid_no_patch("kevent: EVFILT_READ on a kqueue descriptor");
     }
     if (!GuestSockets::IsOpen(descriptor)) {
-        NotImplemented_nid_no_patch(change.filter == EVFILT_READ ? "kevent: EVFILT_READ on a non-socket descriptor" : "kevent: EVFILT_WRITE on a non-socket descriptor");
+        if (!DescriptorIsRegularFile(descriptor)) {
+            NotImplemented_nid_no_patch(change.filter == EVFILT_READ ? "kevent: EVFILT_READ on a descriptor that is neither a socket nor a regular file" : "kevent: EVFILT_WRITE on a descriptor that is neither a socket nor a regular file");
+        }
+        if (change.fflags != 0) {
+            NotImplemented_nid_no_patch("kevent: fflags on a regular file");
+        }
+        if ((flags & EV_CLEAR) != 0) {
+            NotImplemented_nid_no_patch("kevent: EV_CLEAR on a regular file");
+        }
+        auto event = EqueueRegularFileEvent(descriptor, change.filter, flags, change.udata);
+        change.data = 0;
+        return GuestErrno(queue->AddEvent(event));
     }
     if ((change.fflags & NOTE_LOWAT) != 0) {
         NotImplemented_nid_no_patch("kevent: NOTE_LOWAT");
@@ -217,6 +228,9 @@ int ModifyKnote(const KernelEqueueRef& queue, KernelEvent& change) {
     }
     if ((change.filter == EVFILT_READ || change.filter == EVFILT_WRITE) && (change.fflags & NOTE_LOWAT) != 0) {
         NotImplemented_nid_no_patch("kevent: NOTE_LOWAT");
+    }
+    if ((change.filter == EVFILT_READ || change.filter == EVFILT_WRITE) && change.fflags != 0 && !GuestSockets::IsOpen(static_cast<int>(change.ident))) {
+        NotImplemented_nid_no_patch("kevent: fflags on a regular file");
     }
     if (change.filter == EVFILT_VNODE) {
         RequireVnodeNotes(change.fflags);
