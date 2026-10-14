@@ -15,6 +15,7 @@ extern "C" std::uint64_t APS5_VABI sceAgcDcbEventWriteGetSize(std::uint8_t event
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbResetQueue(CommandBuffer* buf, std::uint32_t op, std::uint32_t state);
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbClearState(CommandBuffer* buf, std::uint32_t command);
 extern "C" std::uint32_t* APS5_VABI sceAgcDcbSetFlip(CommandBuffer* buf, std::uint32_t handle, std::int32_t index, std::uint32_t mode, std::int64_t argument);
+extern "C" std::uint32_t* APS5_VABI sceAgcAcbSetFlip(CommandBuffer* buf, std::uint32_t handle, std::int32_t index, std::uint32_t mode, std::int64_t argument);
 extern "C" std::uint32_t* APS5_VABI sceAgcAcbWaitUntilSafeForRendering(CommandBuffer* buf, std::uint32_t handle, std::uint32_t index);
 extern "C" int APS5_VABI sceAgcSuspendPoint();
 extern "C" int APS5_VABI sceAgcInit(std::uint32_t version);
@@ -295,13 +296,23 @@ void testWorkloadStreams() {
     registered.words.fill(0xdeadbeefu);
     const auto untouched = registered.words;
     expectFailure([&] { sceAgcDcbSetWorkloadStreamInactive(&registered.buffer, 1); });
-    expectFailure([&] { sceAgcAcbSetWorkloadsActive(&registered.buffer, 1, ids, 2); });
-    expectFailure([&] { sceAgcAcbSetWorkloadComplete(&registered.buffer, 1, 3); });
     expectFailure([&] { sceAgcAcbSetWorkloadStreamInactive(&registered.buffer, 1); });
     check(registered.words == untouched && registered.buffer.cursor_up == registered.words.data(), "a workload call that threw modified the buffer");
     check(sceAgcDcbSetWorkloadStreamInactive(nullptr, 1) == nullptr && sceAgcAcbSetWorkloadsActive(nullptr, 1, ids, 2) == nullptr &&
         sceAgcAcbSetWorkloadComplete(nullptr, 1, 3) == nullptr && sceAgcAcbSetWorkloadStreamInactive(nullptr, 1) == nullptr,
         "a workload call with a null command buffer for a registered stream returned a packet");
+    Storage graphics;
+    Storage compute;
+    graphics.words.fill(0xdeadbeefu);
+    compute.words.fill(0xdeadbeefu);
+    auto* graphicsActive = sceAgcDcbSetWorkloadsActive(&graphics.buffer, 1, ids, 2);
+    auto* computeActive = sceAgcAcbSetWorkloadsActive(&compute.buffer, 1, ids, 2);
+    auto* graphicsComplete = sceAgcDcbSetWorkloadComplete(&graphics.buffer, 1, 3);
+    auto* computeComplete = sceAgcAcbSetWorkloadComplete(&compute.buffer, 1, 3);
+    check(computeActive == compute.words.data() && graphicsActive == graphics.words.data() && computeComplete - computeActive == graphicsComplete - graphicsActive,
+        "compute workload packets were not placed like graphics ones");
+    check(compute.words == graphics.words && compute.buffer.cursor_up - compute.words.data() == graphics.buffer.cursor_up - graphics.words.data(),
+        "compute workload packets differ from graphics ones");
     check(sceAgcDriverUnregisterWorkloadStream(1) == 0, "workload stream unregistration failed");
 }
 
@@ -415,6 +426,11 @@ void testFlip() {
     exhausted.buffer.cursor_down = exhausted.words.data() + 5;
     expectFailure([&] { sceAgcDcbSetFlip(&exhausted.buffer, 1, 0, 1, 0); });
     check(exhausted.buffer.cursor_up == exhausted.words.data(), "failed flip allocation advanced cursor");
+    Storage computeFlip;
+    computeFlip.words.fill(0xdeadbeefu);
+    const auto untouchedFlip = computeFlip.words;
+    expectFailure([&] { sceAgcAcbSetFlip(&computeFlip.buffer, 1, 0, 1, 0); });
+    check(computeFlip.words == untouchedFlip && computeFlip.buffer.cursor_up == computeFlip.words.data(), "unimplemented compute flip wrote to the buffer");
     Storage acb;
     acb.words.fill(0xdeadbeefu);
     auto* wait = sceAgcAcbWaitUntilSafeForRendering(&acb.buffer, 0xfedcba98u, 2);

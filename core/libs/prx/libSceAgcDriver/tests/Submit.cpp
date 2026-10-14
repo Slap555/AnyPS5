@@ -227,6 +227,11 @@ void testEndOfPipeInterrupts() {
     check(output->ready.load() == 1, "flip was not handed to its output");
     check(owner->GetTriggeredEvents(events.data(), 2) == 1 && events[0].udata == &graphicsTag && events[0].data == 1 && sceAgcDriverGetEqEventType(events.data()) == 0, "flip did not raise the graphics end-of-pipe event");
     check(owner->GetTriggeredEvents(events.data(), 2) == 0, "flip event was not cleared");
+    std::array<std::uint32_t, 18> workload{0xc0101000u, 1, 0x18u, 0};
+    Packet workloadPacket{workload.data(), static_cast<std::uint32_t>(workload.size()), 0, {}};
+    check(sceAgcDriverSubmitAcb(0x20, &workloadPacket) == 0, "compute workload packet submit failed");
+    AgcDriverWaitIdle_nid_postfix();
+    check(owner->GetTriggeredEvents(events.data(), 2) == 0, "compute workload packet raised an interrupt");
     AgcDriverUnregisterVideoOutput_nid_postfix(7, output);
     alignas(8) static volatile std::uint64_t label = 0;
     const auto labelAddress = reinterpret_cast<std::uintptr_t>(&label);
