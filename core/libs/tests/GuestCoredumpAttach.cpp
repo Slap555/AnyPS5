@@ -13,6 +13,7 @@ int APS5_VABI sceCoredumpUnregisterCoredumpHandler(void);
 int APS5_VABI sceCoredumpAttachMemoryRegion(uint32_t userValue, const void* mem, size_t size);
 int APS5_VABI sceCoredumpAttachUserMemoryFile(uint32_t userValue, const void* mem, size_t size);
 int APS5_VABI sceCoredumpGetStopInfoCpu(void* info, size_t size);
+int APS5_VABI sceCoredumpGetThreadContextInfo(void* threadContextInfo, size_t threadContextInfoSize);
 }
 
 namespace {
@@ -69,6 +70,19 @@ int main() {
     Require(Throws([&] { sceCoredumpGetStopInfoCpu(reinterpret_cast<void*>(UINTPTR_MAX - 7u), 16); }, "sceCoredumpGetStopInfoCpu"));
     for (const size_t size : {size_t{0}, size_t{1}, size_t{15}, size_t{17}, SIZE_MAX})
         Require(Throws([&] { sceCoredumpGetStopInfoCpu(region.data() + 16, size); }, "sceCoredumpGetStopInfoCpu"));
+
+    alignas(uint64_t) std::array<unsigned char, 152> context{};
+    for (size_t index = 0; index < context.size(); ++index) context[index] = static_cast<unsigned char>(index * 5 + 1);
+    const auto contextOriginal = context;
+    Require(sceCoredumpGetThreadContextInfo(context.data(), 144) == NotInCoredumpHandler);
+    std::thread([&] { fromThread = sceCoredumpGetThreadContextInfo(context.data() + 8, 144); }).join();
+    Require(fromThread == NotInCoredumpHandler);
+    Require(context == contextOriginal);
+    Require(Throws([&] { sceCoredumpGetThreadContextInfo(nullptr, 144); }, "sceCoredumpGetThreadContextInfo"));
+    Require(Throws([&] { sceCoredumpGetThreadContextInfo(context.data() + 1, 144); }, "sceCoredumpGetThreadContextInfo"));
+    Require(Throws([&] { sceCoredumpGetThreadContextInfo(reinterpret_cast<void*>(UINTPTR_MAX - 7u), 144); }, "sceCoredumpGetThreadContextInfo"));
+    for (const size_t size : {size_t{0}, size_t{16}, size_t{143}, size_t{145}, SIZE_MAX})
+        Require(Throws([&] { sceCoredumpGetThreadContextInfo(context.data(), size); }, "sceCoredumpGetThreadContextInfo"));
 
     Require(sceCoredumpUnregisterCoredumpHandler() == 0);
     Require(sceCoredumpAttachMemoryRegion(1, region.data(), region.size()) == NotInCoredumpHandler);
