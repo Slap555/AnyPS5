@@ -27,6 +27,13 @@ static void requireTextOutsideHandler(const char* function, const char* argument
     if (text == nullptr) throw std::runtime_error(std::string(function) + ": null " + argument + " outside the core dump handler");
 }
 
+static int readStopStateOutsideHandler(const char* function, const char* what, void* buffer, size_t size, size_t expected) {
+    const auto address = reinterpret_cast<uintptr_t>(buffer);
+    if (buffer == nullptr || size != expected || address % alignof(uint64_t) != 0 || size > UINTPTR_MAX - address)
+        throw std::runtime_error(std::string(function) + ": null, unaligned, wrapping or unsupported " + what + " buffer outside the core dump handler");
+    return SCE_COREDUMP_ERROR_NOT_IN_COREDUMP_HANDLER;
+}
+
 extern "C" {
 
 int APS5_VABI sceCoredumpRegisterCoredumpHandler(uint64_t handler, size_t stack_size, uint64_t context) {
@@ -86,17 +93,11 @@ int64_t APS5_VABI sceCoredumpWriteUserData(const void* data, size_t size) {
 }
 
 int APS5_VABI sceCoredumpGetStopInfoCpu(void* info, size_t size) {
-    const auto address = reinterpret_cast<uintptr_t>(info);
-    if (info == nullptr || size != 16 || address % alignof(uint64_t) != 0 || size > UINTPTR_MAX - address)
-        throw std::runtime_error(std::string(__func__) + ": null, unaligned, wrapping or unsupported CPU stop-info buffer outside the core dump handler");
-    return SCE_COREDUMP_ERROR_NOT_IN_COREDUMP_HANDLER;
+    return readStopStateOutsideHandler(__func__, "CPU stop-info", info, size, 16);
 }
 
 int APS5_VABI sceCoredumpGetThreadContextInfo(void* threadContextInfo, size_t threadContextInfoSize) {
-    (void)threadContextInfo;
-    (void)threadContextInfoSize;
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+    return readStopStateOutsideHandler(__func__, "thread context", threadContextInfo, threadContextInfoSize, 144);
 }
 
 int APS5_VABI sceCoredumpWriteUserString() {
