@@ -28,6 +28,11 @@ int APS5_VABI sceKernelDeleteEqueue(KernelEqueue eq);
 int APS5_VABI sceKernelWaitEqueue(KernelEqueue eq, KernelEvent* ev, int num, int* out, const KernelUseconds* timo);
 int APS5_VABI sceKernelAddFileEvent(KernelEqueue eq, int fd, int watch, void* udata);
 int APS5_VABI sceKernelDeleteFileEvent(KernelEqueue eq, int fd);
+int APS5_VABI sceKernelAddReadEvent(KernelEqueue eq, int fd, std::size_t size, void* udata);
+int APS5_VABI sceKernelAddWriteEvent(KernelEqueue eq, int fd, std::size_t size, void* udata);
+int APS5_VABI sceKernelDeleteReadEvent(KernelEqueue eq, int fd);
+int APS5_VABI sceKernelDeleteWriteEvent(KernelEqueue eq, int fd);
+std::int64_t APS5_VABI lseek_nid_postfix(int, std::int64_t, int);
 int* APS5_VABI __error_nid_postfix();
 }
 
@@ -311,6 +316,61 @@ static void FileWatch() {
     Require(std::filesystem::remove(path));
 }
 
+static void RegularFileReadWrite() {
+    const auto path = TemporaryName("readable");
+    const int file = open_nid_postfix(path.c_str(), ReadWrite | Create, 0644);
+    Require(file >= 0);
+    const auto ident = static_cast<std::uintptr_t>(file);
+    const int kq = kqueue_nid_postfix();
+    int marker = 0;
+    KernelEvent events[4]{};
+    Require(Apply(kq, Change(ident, EvfiltRead, EvAdd, 0, 0, &marker)) == 0);
+    Require(Poll(kq, events, 4) == 0);
+    Require(write_nid_postfix(file, "abcdef", 6) == 6);
+    Require(Poll(kq, events, 4) == 0);
+    Require(lseek_nid_postfix(file, 2, 0) == 2);
+    Require(Poll(kq, events, 4) == 1);
+    Require(events[0].ident == ident && events[0].filter == EvfiltRead && events[0].data == 4 && events[0].udata == &marker);
+    Require(Poll(kq, events, 4) == 1 && events[0].data == 4);
+    Require(lseek_nid_postfix(file, 9, 0) == 9);
+    Require(Poll(kq, events, 4) == 1 && events[0].data == -3);
+    Require(lseek_nid_postfix(file, 0, 2) == 6);
+    Require(Poll(kq, events, 4) == 0);
+    const int writer = open_nid_postfix(path.c_str(), ReadWrite, 0);
+    Require(writer >= 0);
+    std::thread extend([writer] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        Require(lseek_nid_postfix(writer, 0, 2) == 6);
+        Require(write_nid_postfix(writer, "gh", 2) == 2);
+    });
+    Require(Wait(kq, events, 4) == 1 && events[0].data == 2);
+    extend.join();
+    Require(close_nid_postfix(writer) == 0);
+    Require(Apply(kq, Change(ident, EvfiltWrite, EvAdd)) == 0);
+    Require(Poll(kq, events, 4) == 2);
+    Require(Apply(kq, Change(ident, EvfiltRead, EvDelete)) == 0);
+    Require(Poll(kq, events, 4) == 1 && events[0].filter == EvfiltWrite && events[0].data == 0);
+    Require(Apply(kq, Change(ident, EvfiltWrite, EvDelete)) == 0);
+    Require(Throws([kq, ident] { Apply(kq, Change(ident, EvfiltRead, EvAdd | EvClear)); }));
+    Require(Throws([kq, ident] { Apply(kq, Change(ident, EvfiltRead, EvAdd, 0x0001)); }));
+    Require(Poll(kq, events, 4) == 0);
+
+    KernelEqueue eq = 0;
+    Require(sceKernelCreateEqueue(&eq, "regular") == SceOk);
+    Require(lseek_nid_postfix(file, 1, 0) == 1);
+    Require(sceKernelAddReadEvent(eq, file, 1, &marker) == SceOk);
+    Require(sceKernelAddWriteEvent(eq, file, 1, nullptr) == SceOk);
+    int count = 0;
+    const KernelUseconds second = 1000000;
+    Require(sceKernelWaitEqueue(eq, events, 4, &count, &second) == SceOk && count == 2);
+    Require(sceKernelDeleteReadEvent(eq, file) == SceOk);
+    Require(sceKernelDeleteWriteEvent(eq, file) == SceOk);
+    Require(sceKernelDeleteEqueue(eq) == SceOk);
+    Require(close_nid_postfix(file) == 0);
+    Require(close_nid_postfix(kq) == 0);
+    Require(std::filesystem::remove(path));
+}
+
 #ifndef _WIN32
 static void RenameAndDeleteWatchedFile() {
     const auto path = TemporaryName("moved");
@@ -438,6 +498,7 @@ int main() {
     SocketPair();
     Errors();
     FileWatch();
+    RegularFileReadWrite();
 #ifndef _WIN32
     RenameAndDeleteWatchedFile();
 #endif

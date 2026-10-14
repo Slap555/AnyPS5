@@ -3,6 +3,7 @@
 #include "prx/libc/include/General.hpp"
 #include "prx/libkernel/Socket/include/SocketRuntime.hpp"
 #include "prx/libkernel/File/include/File.hpp"
+#include "prx/libkernel/File/include/NativeStat.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -14,6 +15,10 @@
 static std::unordered_map<KernelEqueue, KernelEqueueRef> g_equeues;
 static std::mutex g_equeueMutex;
 static uint64_t g_nextEqueue = 1;
+static constexpr std::uint64_t REGULAR_FILE_POLL_NANOSECONDS = 10000000;
+static constexpr std::uint16_t FILE_TYPE_MASK = 0170000;
+static constexpr std::uint16_t FILE_TYPE_REGULAR = 0100000;
+static constexpr int SEEK_FROM_CURRENT = 1;
 
 extern "C" {
 
@@ -98,9 +103,22 @@ void KernelEqueuePrivate::WakePollers() {
 
 void KernelEqueuePrivate::WaitForDescriptors(std::unique_lock<std::mutex>& lock, std::uint64_t deadlineNanos) {
     std::vector<GuestSockets::Interest> interests;
+    bool regularFiles = false;
     for (const auto& e : m_events) {
-        if (e.filter.pollFunc != nullptr) {
-            interests.push_back({static_cast<int>(e.event.ident), e.event.filter == EVFILT_WRITE});
+        if (e.filter.pollFunc == nullptr) {
+            continue;
+        }
+        const int descriptor = static_cast<int>(e.event.ident);
+        if (GuestSockets::IsOpen(descriptor)) {
+            interests.push_back({descriptor, e.event.filter == EVFILT_WRITE});
+        } else {
+            regularFiles = true;
+        }
+    }
+    if (regularFiles) {
+        const std::uint64_t slice = TimedWait::NowNanos() + REGULAR_FILE_POLL_NANOSECONDS;
+        if (deadlineNanos == 0 || deadlineNanos > slice) {
+            deadlineNanos = slice;
         }
     }
     const auto waker = GuestSockets::CurrentWaker();
@@ -595,11 +613,15 @@ int APS5_VABI sceKernelDeleteAmprSystemEvent(KernelEqueue eq, int id) {
 
 static int AddDescriptorEvent(KernelEqueue eq, int fd, std::size_t size, void* udata, int16_t filter) {
     const bool isSocket = GuestSockets::IsOpen(fd);
-    if (!isSocket && DescriptorIsOpen_nid_no_patch(fd)) {
-        NotImplemented_nid_no_patch(filter == EVFILT_READ ? "sceKernelAddReadEvent: non-socket descriptor" : "sceKernelAddWriteEvent: non-socket descriptor");
+    const bool isFile = !isSocket && DescriptorIsRegularFile(fd);
+    if (!isSocket && !isFile && DescriptorIsOpen_nid_no_patch(fd)) {
+        NotImplemented_nid_no_patch(filter == EVFILT_READ ? "sceKernelAddReadEvent: descriptor that is neither a socket nor a regular file" : "sceKernelAddWriteEvent: descriptor that is neither a socket nor a regular file");
     }
     if (size > 1) {
         NotImplemented_nid_no_patch(filter == EVFILT_READ ? "sceKernelAddReadEvent: low watermark" : "sceKernelAddWriteEvent: low watermark");
+    }
+    if (isFile) {
+        return EqueueAddEvent_nid_postfix(eq, EqueueRegularFileEvent(fd, filter, EV_ADD, udata));
     }
     if (!isSocket) {
         return SCE_KERNEL_ERROR_EBADF;
@@ -641,6 +663,44 @@ KernelEqueueEvent EqueueDescriptorEvent(int descriptor, int16_t filter, uint16_t
         e->event.flags = static_cast<uint16_t>(eof ? (e->event.flags | EV_EOF) : (e->event.flags & ~EV_EOF));
         return true;
     };
+    event.filter.resetFunc = [](KernelEqueueEvent* e) {
+        e->triggered = false;
+    };
+    return event;
+}
+
+bool DescriptorIsRegularFile(int descriptor) {
+    FileStat status{};
+    return descriptor >= 0 && !GuestSockets::IsOpen(descriptor) && DescriptorIsOpen_nid_no_patch(descriptor) &&
+        File::FillFileStatFromDescriptor(descriptor, &status) && (status.st_mode & FILE_TYPE_MASK) == FILE_TYPE_REGULAR;
+}
+
+KernelEqueueEvent EqueueRegularFileEvent(int descriptor, int16_t filter, uint16_t flags, void* udata) {
+    KernelEqueueEvent event{};
+    event.event.ident = static_cast<uintptr_t>(descriptor);
+    event.event.filter = filter;
+    event.event.flags = flags;
+    event.event.udata = udata;
+    if (filter == EVFILT_WRITE) {
+        event.filter.pollFunc = [](KernelEqueueEvent* e) {
+            e->event.data = 0;
+            return true;
+        };
+    } else {
+        event.filter.pollFunc = [](KernelEqueueEvent* e) {
+            const int descriptor = static_cast<int>(e->event.ident);
+            FileStat status{};
+            if (!File::FillFileStatFromDescriptor(descriptor, &status)) {
+                return false;
+            }
+            const std::int64_t offset = sceKernelLseek(descriptor, 0, SEEK_FROM_CURRENT);
+            if (offset < 0) {
+                return false;
+            }
+            e->event.data = static_cast<intptr_t>(status.st_size - offset);
+            return e->event.data != 0;
+        };
+    }
     event.filter.resetFunc = [](KernelEqueueEvent* e) {
         e->triggered = false;
     };
