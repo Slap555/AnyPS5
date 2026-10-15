@@ -37,8 +37,8 @@
 #include <vector>
 
 extern "C" {
-std::int64_t APS5_VABI sceNetSend(int s, const void* buf, std::size_t len, int flags);
-std::int64_t APS5_VABI sceNetRecv(int s, void* buf, std::size_t len, int flags);
+std::int64_t NetSend_nid_no_patch(int s, const void* buf, std::size_t len, int flags);
+std::int64_t NetRecv_nid_no_patch(int s, void* buf, std::size_t len, int flags);
 }
 
 namespace {
@@ -325,7 +325,7 @@ CertName& RequireName(const char* function, Context& context, void* certName) {
 
 int BioSend(void* argument, const unsigned char* buffer, std::size_t length) {
     auto& transport = *static_cast<Transport*>(argument);
-    const auto sent = sceNetSend(transport.socket, buffer, std::min<std::size_t>(length, INT_MAX), 0);
+    const auto sent = NetSend_nid_no_patch(transport.socket, buffer, std::min<std::size_t>(length, INT_MAX), 0);
     if (sent < 0) {
         transport.netError = sent;
         return MBEDTLS_ERR_NET_SEND_FAILED;
@@ -335,7 +335,7 @@ int BioSend(void* argument, const unsigned char* buffer, std::size_t length) {
 
 int BioReceive(void* argument, unsigned char* buffer, std::size_t length) {
     auto& transport = *static_cast<Transport*>(argument);
-    const auto received = sceNetRecv(transport.socket, buffer, std::min<std::size_t>(length, INT_MAX), 0);
+    const auto received = NetRecv_nid_no_patch(transport.socket, buffer, std::min<std::size_t>(length, INT_MAX), 0);
     if (received < 0) {
         transport.netError = received;
         return MBEDTLS_ERR_NET_RECV_FAILED;
