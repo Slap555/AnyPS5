@@ -1554,4 +1554,7 @@ int APS5_VABI sceNetShowIfconfig() {
 extern const std::uint8_t in6addr_any_nid_postfix[16] = {};
 extern const std::uint8_t in6addr_loopback_nid_postfix[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
 
+std::int64_t NetSend_nid_no_patch(int s, const void* buf, std::size_t len, int flags) { return sceNetSend(s, buf, len, flags); }
+std::int64_t NetRecv_nid_no_patch(int s, void* buf, std::size_t len, int flags) { return sceNetRecv(s, buf, len, flags); }
+
 }
